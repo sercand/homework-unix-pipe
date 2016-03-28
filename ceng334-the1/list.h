@@ -13,6 +13,6 @@
 
 void lladd(int data,int _in,int _out);
 void llclear();
-int llvalid();
+int llvalid(int* size);
 
 #endif /* list_h */

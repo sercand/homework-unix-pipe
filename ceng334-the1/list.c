@@ -69,17 +69,20 @@ void lladd(int data,int _in, int _out){
     }
 }
 
-int llvalid(){
+int llvalid(int* size){
+    int a = 0;
     list_node *temp;
     temp = head;
     while(temp != NULL)
     {
+        a += 1;
         //WTF
         if(!((temp->_in >= 1 && temp->_out >= 1) || (temp->_in == 0 && temp->_out == 0))){
             return 0;
         }
         temp = temp->next;
     }
+    *size = a;
     return 1;
 }
 
