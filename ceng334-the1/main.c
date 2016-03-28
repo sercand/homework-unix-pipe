@@ -10,6 +10,7 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <string.h>
+#include <errno.h>
 #include "list.h"
 
 //#define LOGLEVEL 1
@@ -28,6 +29,11 @@ typedef struct exe_node{
     char * origin_in;
     char * origin_out;
 } exe_node;
+
+typedef struct rename_pipeline{
+    int old_id;
+    int new_id;
+} rename_pipeline;
 
 int node_size = 0;
 exe_node* nodes = NULL;
@@ -117,8 +123,7 @@ int is_executable(int* size){
     return llvalid(size);
 }
 
-char* substring(const char* str, size_t begin, size_t len)
-{
+char* substring(const char* str, size_t begin, size_t len){
     if (str == 0 || strlen(str) == 0 || strlen(str) < begin || strlen(str) < (begin+len))
         return 0;
     
@@ -193,59 +198,100 @@ void clear_nodes(){
     nodes = (exe_node*) malloc(sizeof(exe_node) * node_size);
 }
 
-void run_command(char**cmd, int readIndex, int outn, int * outIndex, int nop, int * pipes){
+void renamePipeIds(){
+    int maxId = 0,i = 0,j = 0,k=0;
+    int numPipe = 0;
+    rename_pipeline* pipes =(rename_pipeline*) malloc(0);
+    for(i = 0 ; i < node_size ; i++){
+        if(nodes[i].in_pipe > -1){
+            int id = nodes[i].in_pipe;
+            int founded_index = -1;
+            for(j = 0 ; j < numPipe ; j++){
+                if(pipes[j].old_id == id){
+                    founded_index = j;
+                    break;
+                }
+            }
+            if(founded_index < 0){
+                pipes = (rename_pipeline*) realloc(pipes, sizeof(rename_pipeline) * (numPipe + 1));
+                pipes[numPipe].old_id = id;
+                maxId = maxId + 1;
+                pipes[numPipe].new_id = maxId;
+                nodes[i].in_pipe = maxId;
+                numPipe = numPipe + 1;
+            }else{
+                nodes[i].in_pipe = pipes[founded_index].new_id;
+            }
+        }
+        for(k = 0; k < nodes[i].out_size; k++){
+            int id = nodes[i].out_pipes[k];
+            int founded_index = -1;
+            for(j = 0 ; j < numPipe ; j++){
+                if(pipes[j].old_id == id){
+                    founded_index = j;
+                    break;
+                }
+            }
+            if(founded_index < 0){
+                maxId = maxId + 1;
+                pipes = (rename_pipeline*) realloc(pipes, sizeof(rename_pipeline) * (numPipe + 1));
+                pipes[numPipe].old_id = id;
+                pipes[numPipe].new_id = maxId;
+                nodes[i].out_pipes[k] = maxId;
+                numPipe = numPipe + 1;
+            }else{
+                nodes[i].out_pipes[k] = pipes[founded_index].new_id;
+            }
+        }
+    }
+}
+
+void run_command(char ** cmd, int readIndex, int outn, int * outIndex, int nop, int * pipes,int cmdIndex,int proxyOffset){
     int     pid;
-    int     fd[2];
     int     k;
     char    readbuffer[1025];
     ssize_t read_bytes;
     int     i;
     int     p = nop * 2;
     
-    if(outn > 1){
-        pipe(fd);
-        DEBUGLOG("new pipes for '%s' are %d:%d\n", cmd[0], fd[0],fd[1]);
+    if(outn > 1) {
+        int fd[2] = {pipes[(proxyOffset + cmdIndex) * 2], pipes[(proxyOffset + cmdIndex) * 2 + 1]};
+        
+        DEBUGLOG("%s: new pipes for '%s' %d:%d are %d:%d\n",__FUNCTION__, cmd[0],proxyOffset,cmdIndex, fd[0], fd[1]);
+        
         switch (pid = fork()) {
             case 0:
                 readIndex = readIndex - 1;
                 if(readIndex >= 0){
                     if( dup2(pipes[readIndex * 2], 0) < 0){
-                        DEBUGLOG("dup2 inside run_command and multiplex %s","i")
+                        DEBUGLOG("%s failed",__FUNCTION__);
                         perror("dup2 inside run_command and multiplex");
                         exit(EXIT_FAILURE);
                     }
                 }
-                if(dup2(fd[1], fileno(stdout))<0){
-                    DEBUGLOG("dup2 inside run_command and multiplex %s","o")
-                    perror("dup2 failed to for multiplex output");
-                    exit(EXIT_FAILURE);
-                }
-                
-                if(close(fd[0]) < 0){
-                    DEBUGLOG("%s, failed to close temp %d \n",__FUNCTION__, fd[0])
-                    perror(cmd[0]);
-                    exit(EXIT_FAILURE);
-                }
-                
+                while ((dup2(fd[1], STDOUT_FILENO) == -1) && (errno == EINTR)) {}
+                /*
+                 if(dup2(fd[1], 1) < 0){
+                 DEBUGLOG("%s failed",__FUNCTION__);
+                 perror("dup2 failed to for multiplex output");
+                 exit(EXIT_FAILURE);
+                 }
+                 */
                 for(i = 0 ; i < p ; i++){
                     if(close(pipes[i]) < 0){
-                        DEBUGLOG("%s, failed to close %d \n",__FUNCTION__,i)
                         perror(cmd[0]);
                         exit(EXIT_FAILURE);
                     }
                 }
                 
                 if(execvp(cmd[0], cmd) < 0){
+                    DEBUGLOG("%s failed",__FUNCTION__);
                     perror(cmd[0]);
                     exit(EXIT_FAILURE);
                 }
-                
+                DEBUGLOG("%s success",__FUNCTION__);
+                exit(0);
             default:
-                if(close(fd[1]) < 0){
-                    DEBUGLOG("%s, failed to close temp %d \n",__FUNCTION__, fd[1])
-                    perror(cmd[0]);
-                    exit(EXIT_FAILURE);
-                }
                 for(i = 0 ; i < p ; i++){
                     int f = 0;
                     for(k = 0; k < outn ; k++){
@@ -254,23 +300,33 @@ void run_command(char**cmd, int readIndex, int outn, int * outIndex, int nop, in
                             f = 1;
                         }
                     }
+                    if(i == ((proxyOffset + cmdIndex) * 2)){
+                        f = 1;
+                    }
                     if(!f){
                         if(close(pipes[i]) < 0){
-                            DEBUGLOG("%s, failed to close %d \n",__FUNCTION__,i)
+                            DEBUGLOG("%s failed",__FUNCTION__);
                             perror(cmd[0]);
                             exit(EXIT_FAILURE);
                         }
-                    }else{
-                        DEBUGLOG("%s, %d wont be closing\n",__FUNCTION__,i)
                     }
                 }
                 while ((read_bytes = read(fd[0], readbuffer, 1024)) > 0) {
+                    DEBUGLOG("%s: multiplex read some data '%s'\n",__FUNCTION__, readbuffer);
                     for(k = 0; k < outn ; k++){
                         write(pipes[(outIndex[k] - 1) * 2 + 1], readbuffer, read_bytes + 1);
                     }
                 }
+                DEBUGLOG("%s: multiplex data finished readed='%zd' errno='%d'\n",__FUNCTION__, read_bytes, errno);
+                
+                close(fd[0]);
+                for(k = 0; k < outn ; k++){
+                    close(pipes[(outIndex[k] - 1) * 2 + 1]);
+                }
+                exit(0);
                 break;
             case -1:
+                DEBUGLOG("%s failed",__FUNCTION__);
                 perror("fork");
                 exit(1);
         }
@@ -278,46 +334,52 @@ void run_command(char**cmd, int readIndex, int outn, int * outIndex, int nop, in
         readIndex = readIndex - 1;
         if(readIndex >= 0){
             if( dup2(pipes[readIndex * 2], 0) < 0){
+                DEBUGLOG("%s failed read\n",cmd[0]);
                 perror("dup2");
                 exit(EXIT_FAILURE);
             }
         }
-
+        
         if(outn == 1){
             if( dup2(pipes[(outIndex[0] - 1) * 2 + 1], 1) < 0 ){
+                DEBUGLOG("%s failed write\n",cmd[0]);
                 perror("dup2");
                 exit(EXIT_FAILURE);
             }
         }
         
         for(i = 0 ; i < p ; i++){
-            close(pipes[i]);
+            if(close(pipes[i]) < 0){
+                perror("dup2: close");
+                exit(EXIT_FAILURE);
+            }
         }
         
         if(execvp(cmd[0], cmd) < 0){
+            DEBUGLOG("%s failed",__FUNCTION__);
             perror(cmd[0]);
             exit(EXIT_FAILURE);
         }
     }
 }
 
-void run(exe_node node, int nop, int * pipes){
+void run(exe_node node,int index, int nop, int * pipes, int proxyOffset){
     int pid,n = 0;
     int osize = node.out_size;
     int readIndex = -1;
     int outIndex = -1;
     char ** cmd = parseCommand(node.command, &n);
-    
     readIndex = node.in_pipe;
     
-    if(osize > 0){
+    if(osize > 0) {
         outIndex = node.out_pipes[0];
     }
-    DEBUGLOG("%s: command='%s' nop='%d' ri='%d' wi='%d'\n",__FUNCTION__, node.command, nop, readIndex, outIndex);
+    DEBUGLOG("%s: %d of %d cmd='%s' nop='%d' ri='%d' wi='%d'\n",__FUNCTION__,index+1, (nop-proxyOffset), node.command, nop, readIndex, outIndex);
     switch (pid = fork()) {
         case 0:
-            run_command(cmd, readIndex, osize, node.out_pipes, nop, pipes);
+            run_command(cmd, readIndex, osize, node.out_pipes, nop, pipes,index, proxyOffset);
         default:
+            DEBUGLOG("%s: %s parent=%d\n",__FUNCTION__,node.command,pid);
             break;
         case -1:
             perror("fork");
@@ -326,21 +388,24 @@ void run(exe_node node, int nop, int * pipes){
 }
 
 void execute(int numberOfPipes){
-    int i;
+    int i,t;
     int status,pid;
     DEBUGLOG("%s: %d of nodes and %d pipes\n",__FUNCTION__, node_size,numberOfPipes);
     
-    int *fd = (int*) malloc(sizeof(int) * numberOfPipes * 2);
-    for(i = 0; i < numberOfPipes;i++){
+    t = numberOfPipes + node_size;
+    int *fd = (int*) malloc(sizeof(int) * t * 2);
+    for(i = 0; i < t;i++){
         fd[i*2] = 0;
         fd[i*2+1] = 0;
         pipe(fd + ( i * 2));
     }
     
+    renamePipeIds();
+    
     if(numberOfPipes == 0){
         DEBUGLOG("%s run via stdin and stdout\n",__FUNCTION__);
         for(i = 0; i < node_size; i++){
-            run(nodes[i], 0,NULL);
+            run(nodes[i], i, 0, NULL,0);
         }
         while ((pid = wait(&status)) != -1){
             DEBUGLOG("process %d exits with %d\n", pid, WEXITSTATUS(status));
@@ -349,11 +414,13 @@ void execute(int numberOfPipes){
         return;
     }
     
-    for(i = 0; i < node_size; i++){
-        run(nodes[i], numberOfPipes, fd);
+    for(i = 0; i < node_size; ++i){
+        DEBUGLOG("%s: %d executing\n",__FUNCTION__, i+1)
+        run(nodes[i], i, t, fd, numberOfPipes);
+        DEBUGLOG("%s: %d executed\n",__FUNCTION__, i+1)
     }
     
-    for(i = 0 ; i < (numberOfPipes*2) ; i++){
+    for(i = 0 ; i < (t*2) ; i++){
         close(fd[i]);
     }
     
