@@ -32,3 +32,6 @@
 *.dSYM/
 Build
 ceng334-the1.xcodeproj/project.xcworkspace/xcuserdata
+*.gz
+ceng334-the1.xcodeproj/xcuserdata/sercand.xcuserdatad
+ceng334-the1.xcodeproj/xcuserdata
