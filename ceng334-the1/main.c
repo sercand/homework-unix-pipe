@@ -249,7 +249,7 @@ void renamePipeIds(){
 void run_command(char ** cmd, int readIndex, int outn, int * outIndex, int nop, int * pipes,int cmdIndex,int proxyOffset){
     int     pid;
     int     k;
-    char    readbuffer[1025];
+    char    readbuffer[32001];
     ssize_t read_bytes;
     int     i;
     int     p = nop * 2;
@@ -311,10 +311,10 @@ void run_command(char ** cmd, int readIndex, int outn, int * outIndex, int nop, 
                         }
                     }
                 }
-                while ((read_bytes = read(fd[0], readbuffer, 1024)) > 0) {
+                while ((read_bytes = read(fd[0], readbuffer, 32000)) > 0) {
                     DEBUGLOG("%s: multiplex read some data '%s'\n",__FUNCTION__, readbuffer);
                     for(k = 0; k < outn ; k++){
-                        write(pipes[(outIndex[k] - 1) * 2 + 1], readbuffer, read_bytes + 1);
+                        write(pipes[(outIndex[k] - 1) * 2 + 1], readbuffer, read_bytes);
                     }
                 }
                 DEBUGLOG("%s: multiplex data finished readed='%zd' errno='%d'\n",__FUNCTION__, read_bytes, errno);
