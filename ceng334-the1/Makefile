@@ -3,7 +3,7 @@
 OBJS = list.o main.o
 CC = gcc
 DEBUG = -g
-CFLAGS = -Wall -c -std=c++11
+CFLAGS = -Wall -c -std=c11
 LFLAGS = -Wall
 
 default: hw1
@@ -21,4 +21,4 @@ clean:
 	\rm *.o *~ hw1
 
 tar:
-	tar -cvf list.h main.c main.c Makefile | gzip > hw1.tar.gz
+	tar -cv list.h main.c list.c Makefile | gzip > hw1.tar.gz
